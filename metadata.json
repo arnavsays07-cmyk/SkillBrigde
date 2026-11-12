@@ -1,0 +1,6 @@
+{
+  "name": "SkillBridge - Campus Peer Tutoring & Credit Exchange",
+  "description": "Full-stack PHP and modern web architecture for campus peer tutoring with ACID double-entry credit ledger, dynamic Fetch API peer search, and step-by-step implementation guide.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
