@@ -8,6 +8,7 @@ import { engine } from './services/mockBackend';
 import { PeerSearch } from './components/PeerSearch';
 import { SessionsManager } from './components/SessionsManager';
 import { CreditLedgerView } from './components/CreditLedgerView';
+import { AuthPage } from './components/AuthPage';
 import { downloadProjectZip, PROCEDURE_GUIDE_MARKDOWN } from './utils/zipExport';
 import {
   Search,
@@ -21,14 +22,15 @@ import {
   FileCode,
   X,
   FileText,
-  Copy
+  Copy,
+  LogOut
 } from 'lucide-react';
 
 type NavTab = 'discovery' | 'sessions' | 'ledger';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('discovery');
-  const [activeUser, setActiveUser] = useState(engine.getActiveUser());
+  const [currentUser, setCurrentUser] = useState(engine.getCurrentUser());
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isZipping, setIsZipping] = useState(false);
@@ -39,20 +41,26 @@ export default function App() {
 
   const handleUserChange = (userId: number) => {
     engine.setActiveUser(userId);
-    setActiveUser(engine.getActiveUser());
+    setCurrentUser(engine.getCurrentUser());
     setUserDropdownOpen(false);
   };
 
+  const handleLogout = () => {
+    setUserDropdownOpen(false);
+    engine.logout();
+    setCurrentUser(null);
+    setActiveTab('discovery');
+  };
+
   const handleResetDb = () => {
-    if (confirm('Reset database to initial seed state? This restores all default credits, sessions, and ledger rows.')) {
-      engine.resetDatabase();
-      setActiveUser(engine.getActiveUser());
-    }
+    engine.resetDatabase();
+    setCurrentUser(engine.getCurrentUser());
+    setUserDropdownOpen(false);
   };
 
   useEffect(() => {
     const unsubscribe = engine.subscribe(() => {
-      setActiveUser(engine.getActiveUser());
+      setCurrentUser(engine.getCurrentUser());
     });
     return unsubscribe;
   }, []);
@@ -75,6 +83,19 @@ export default function App() {
     setCopiedReadme(true);
     setTimeout(() => setCopiedReadme(false), 2000);
   };
+
+  if (!currentUser) {
+    return (
+      <AuthPage
+        onAuthSuccess={() => {
+          setCurrentUser(engine.getCurrentUser());
+          setActiveTab('discovery');
+        }}
+      />
+    );
+  }
+
+  const activeUser = currentUser;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
@@ -138,10 +159,14 @@ export default function App() {
 
               {userDropdownOpen && (
                 <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-2 z-50 text-xs">
-                  <div className="px-3 py-2 border-b border-slate-800 text-[11px] text-slate-400">
-                    Switch Active Campus Student:
+                  <div className="px-3 py-2 border-b border-slate-800">
+                    <div className="text-[11px] font-semibold text-white">{activeUser.name}</div>
+                    <div className="text-[10px] text-slate-400 truncate">{activeUser.email}</div>
                   </div>
-                  <div className="space-y-1 my-1">
+                  <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                    Switch Campus Student
+                  </div>
+                  <div className="space-y-1 my-1 max-h-56 overflow-y-auto">
                     {allUsers.map(user => (
                       <button
                         key={user.id}
@@ -165,12 +190,18 @@ export default function App() {
                     ))}
                   </div>
 
-                  <div className="pt-2 border-t border-slate-800">
+                  <div className="pt-2 border-t border-slate-800 space-y-1">
                     <button
                       onClick={handleResetDb}
-                      className="w-full text-left px-3 py-1.5 rounded-lg text-rose-400 hover:bg-rose-950/30 flex items-center gap-1.5 transition text-[11px]"
+                      className="w-full text-left px-3 py-1.5 rounded-lg text-slate-300 hover:bg-slate-800 flex items-center gap-1.5 transition text-[11px]"
                     >
-                      <RotateCcw className="w-3 h-3" /> Reset Mock Database
+                      <RotateCcw className="w-3 h-3" /> Reset Demo Data
+                    </button>
+                    <button
+                      onClick={handleLogout}
+                      className="w-full text-left px-3 py-1.5 rounded-lg text-rose-400 hover:bg-rose-950/30 flex items-center gap-1.5 transition text-[11px] font-semibold cursor-pointer"
+                    >
+                      <LogOut className="w-3 h-3" /> Sign Out
                     </button>
                   </div>
                 </div>

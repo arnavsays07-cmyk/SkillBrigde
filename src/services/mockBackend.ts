@@ -22,7 +22,8 @@ const STORAGE_KEYS = {
   USER_SKILLS: 'skillbridge_user_skills_v1',
   SESSIONS: 'skillbridge_sessions_v1',
   LEDGER: 'skillbridge_ledger_v1',
-  CURRENT_USER_ID: 'skillbridge_active_uid_v1'
+  PASSWORDS: 'skillbridge_passwords_v1',
+  AUTH_USER_ID: 'skillbridge_auth_uid_v1'
 };
 
 export interface FetchRequestLog {
@@ -37,13 +38,19 @@ export interface FetchRequestLog {
   timestamp: string;
 }
 
+const DEFAULT_PASSWORDS: Record<string, string> = INITIAL_USERS.reduce((acc, u) => {
+  acc[u.email.toLowerCase()] = 'password123';
+  return acc;
+}, {} as Record<string, string>);
+
 class SkillBridgeEngine {
   private users: User[] = [];
   private skills: Skill[] = [];
   private userSkills: UserSkill[] = [];
   private sessions: StudySession[] = [];
   private ledger: CreditLedger[] = [];
-  private activeUserId: number = 1;
+  private passwords: Record<string, string> = {};
+  private activeUserId: number | null = null;
   private logs: FetchRequestLog[] = [];
   private listeners: (() => void)[] = [];
 
@@ -58,14 +65,16 @@ class SkillBridgeEngine {
       const storedUserSkills = localStorage.getItem(STORAGE_KEYS.USER_SKILLS);
       const storedSessions = localStorage.getItem(STORAGE_KEYS.SESSIONS);
       const storedLedger = localStorage.getItem(STORAGE_KEYS.LEDGER);
-      const storedUid = localStorage.getItem(STORAGE_KEYS.CURRENT_USER_ID);
+      const storedPasswords = localStorage.getItem(STORAGE_KEYS.PASSWORDS);
+      const storedUid = localStorage.getItem(STORAGE_KEYS.AUTH_USER_ID);
 
       this.users = storedUsers ? JSON.parse(storedUsers) : [...INITIAL_USERS];
       this.skills = storedSkills ? JSON.parse(storedSkills) : [...INITIAL_SKILLS];
       this.userSkills = storedUserSkills ? JSON.parse(storedUserSkills) : [...INITIAL_USER_SKILLS];
       this.sessions = storedSessions ? JSON.parse(storedSessions) : [...INITIAL_SESSIONS];
       this.ledger = storedLedger ? JSON.parse(storedLedger) : [...INITIAL_LEDGER];
-      this.activeUserId = storedUid ? parseInt(storedUid, 10) : 1;
+      this.passwords = storedPasswords ? JSON.parse(storedPasswords) : { ...DEFAULT_PASSWORDS };
+      this.activeUserId = storedUid ? parseInt(storedUid, 10) : null;
     } catch {
       this.resetDatabase();
     }
@@ -78,7 +87,12 @@ class SkillBridgeEngine {
       localStorage.setItem(STORAGE_KEYS.USER_SKILLS, JSON.stringify(this.userSkills));
       localStorage.setItem(STORAGE_KEYS.SESSIONS, JSON.stringify(this.sessions));
       localStorage.setItem(STORAGE_KEYS.LEDGER, JSON.stringify(this.ledger));
-      localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, this.activeUserId.toString());
+      localStorage.setItem(STORAGE_KEYS.PASSWORDS, JSON.stringify(this.passwords));
+      if (this.activeUserId !== null) {
+        localStorage.setItem(STORAGE_KEYS.AUTH_USER_ID, this.activeUserId.toString());
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.AUTH_USER_ID);
+      }
     } catch (e) {
       console.warn('Storage persistence failed', e);
     }
@@ -102,12 +116,18 @@ class SkillBridgeEngine {
     this.userSkills = JSON.parse(JSON.stringify(INITIAL_USER_SKILLS));
     this.sessions = JSON.parse(JSON.stringify(INITIAL_SESSIONS));
     this.ledger = JSON.parse(JSON.stringify(INITIAL_LEDGER));
+    this.passwords = { ...DEFAULT_PASSWORDS };
     this.activeUserId = 1;
     this.persist();
   }
 
+  public getCurrentUser(): User | null {
+    if (this.activeUserId === null) return null;
+    return this.users.find(u => u.id === this.activeUserId) || null;
+  }
+
   public getActiveUser(): User {
-    const user = this.users.find(u => u.id === this.activeUserId);
+    const user = this.activeUserId !== null ? this.users.find(u => u.id === this.activeUserId) : undefined;
     return user || this.users[0];
   }
 
@@ -116,6 +136,126 @@ class SkillBridgeEngine {
       this.activeUserId = userId;
       this.persist();
     }
+  }
+
+  public async login(email: string, password: string): Promise<{ status: 'success' | 'error'; message: string; user?: User }> {
+    await new Promise(r => setTimeout(r, 250));
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!normalizedEmail || !password) {
+      return { status: 'error', message: 'Please enter a valid campus email and password.' };
+    }
+
+    const user = this.users.find(u => u.email.toLowerCase() === normalizedEmail);
+    const storedPassword = this.passwords[normalizedEmail];
+
+    if (!user || storedPassword !== password) {
+      return { status: 'error', message: 'Invalid credentials. Please verify your email and password.' };
+    }
+
+    if (user.status === 'suspended') {
+      return { status: 'error', message: 'This account is suspended. Contact campus admin.' };
+    }
+
+    this.activeUserId = user.id;
+    this.persist();
+    return { status: 'success', message: `Welcome back, ${user.name}!`, user };
+  }
+
+  public async register(payload: {
+    name: string;
+    email: string;
+    enrollment_no: string;
+    department: string;
+    semester: number;
+    password: string;
+    bio?: string;
+    availability?: string;
+    teachSkillIds?: number[];
+  }): Promise<{ status: 'success' | 'error'; message: string; user?: User }> {
+    await new Promise(r => setTimeout(r, 300));
+    const name = payload.name.trim();
+    const email = payload.email.trim().toLowerCase();
+    const enrollmentNo = payload.enrollment_no.trim().toUpperCase();
+    const department = payload.department.trim();
+
+    if (!name || !email || !enrollmentNo || !department) {
+      return { status: 'error', message: 'All required student profile fields must be completed.' };
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return { status: 'error', message: 'Please enter a valid campus email address.' };
+    }
+
+    if (payload.password.length < 6) {
+      return { status: 'error', message: 'Password must be at least 6 characters long.' };
+    }
+
+    if (this.users.some(u => u.email.toLowerCase() === email)) {
+      return { status: 'error', message: 'An account with this campus email already exists.' };
+    }
+
+    if (this.users.some(u => u.enrollment_no.toUpperCase() === enrollmentNo)) {
+      return { status: 'error', message: 'This enrollment number is already registered.' };
+    }
+
+    const nextId = this.users.reduce((max, u) => Math.max(max, u.id), 0) + 1;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    const newUser: User = {
+      id: nextId,
+      name,
+      email,
+      enrollment_no: enrollmentNo,
+      department,
+      semester: payload.semester,
+      role: 'student',
+      credit_balance: 20,
+      average_rating: 5.0,
+      total_reviews: 0,
+      bio: payload.bio?.trim() || `${department} student (Semester ${payload.semester}) excited to collaborate on SkillBridge.`,
+      availability: payload.availability?.trim() || 'Weekday Evenings & Weekends',
+      status: 'active',
+      created_at: now
+    };
+
+    this.users.push(newUser);
+    this.passwords[email] = payload.password;
+
+    if (payload.teachSkillIds && payload.teachSkillIds.length > 0) {
+      let nextSkillJoinId = this.userSkills.reduce((max, us) => Math.max(max, us.id), 0) + 1;
+      for (const skillId of payload.teachSkillIds) {
+        this.userSkills.push({
+          id: nextSkillJoinId++,
+          user_id: newUser.id,
+          skill_id: skillId,
+          skill_type: 'teach'
+        });
+      }
+    }
+
+    const nextLedgerId = this.ledger.reduce((max, l) => Math.max(max, l.id), 0) + 1;
+    this.ledger.unshift({
+      id: nextLedgerId,
+      user_id: newUser.id,
+      session_id: null,
+      transaction_type: 'bonus',
+      amount: 20,
+      balance_after: 20,
+      description: 'Welcome onboarding bonus credits upon enrollment verification',
+      created_at: now,
+      user_name: newUser.name
+    });
+
+    this.activeUserId = newUser.id;
+    this.persist();
+
+    return { status: 'success', message: 'Registration complete! 20 welcome credits added.', user: newUser };
+  }
+
+  public logout() {
+    this.activeUserId = null;
+    this.persist();
   }
 
   public getAllUsers(): User[] {
